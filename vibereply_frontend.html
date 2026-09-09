@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<!--
+  🌟 VIBEREPLY FRONTEND 🌟
+  --------------------------
+  This is the "menu" / screen that a real person sees and clicks around.
+  It talks to our backend (the "waiter") using something called "fetch"
+  — think of fetch as picking up the phone and calling the backend to
+  ask for something, then waiting for the answer.
+
+  This file only works while your backend (vibereply_backend.py) is
+  running in the terminal at the same time!
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>VibeReply</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #faf7ff;
+      color: #333;
+    }
+    h1 {
+      color: #7c3aed;
+    }
+    textarea, input, select, button {
+      width: 100%;
+      padding: 10px;
+      margin: 6px 0 16px 0;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      font-size: 15px;
+      box-sizing: border-box;
+    }
+    button {
+      background: #7c3aed;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:hover {
+      background: #6d28d9;
+    }
+    #result {
+      background: white;
+      border-radius: 10px;
+      padding: 16px;
+      margin-top: 16px;
+      border: 1px solid #e5e5e5;
+      display: none;
+    }
+    .label {
+      font-weight: bold;
+      color: #7c3aed;
+    }
+    /* 📖 Styling for our new History section */
+    #history {
+      margin-top: 40px;
+    }
+    .history-card {
+      background: white;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
+      border: 1px solid #e5e5e5;
+    }
+    .stars {
+      color: #f5a623;
+      font-weight: bold;
+    }
+    .timestamp {
+      color: #999;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🌟 VibeReply</h1>
+  <p>Type in a pretend review below and see what your robot suggests!</p>
+
+  <!-- This is where the person types the review -->
+  <label>Customer name</label>
+  <input id="customer" type="text" placeholder="e.g. Sarah T.">
+
+  <label>Star rating (1-5)</label>
+  <input id="stars" type="number" min="1" max="5" value="3">
+
+  <label>Review text</label>
+  <textarea id="text" rows="4" placeholder="Type a pretend review here..."></textarea>
+
+  <!-- This button triggers the "phone call" to our backend -->
+  <button onclick="analyzeReview()">✨ Get Suggested Reply</button>
+
+  <!-- This box stays hidden until we get an answer back -->
+  <div id="result"></div>
+
+  <!-- 📖 NEW: History section showing everything saved in the backend -->
+  <div id="history">
+    <h2>📖 Review History</h2>
+    <button onclick="loadHistory()">🔄 Refresh History</button>
+    <div id="historyList">Click "Refresh History" to load saved reviews...</div>
+  </div>
+
+  <script>
+    // This function runs when the button is clicked.
+    async function analyzeReview() {
+      // Step 1: grab whatever the person typed
+      const customer = document.getElementById("customer").value || "Customer";
+      const stars = document.getElementById("stars").value || 3;
+      const text = document.getElementById("text").value;
+
+      if (!text) {
+        alert("Please type a review first!");
+        return;
+      }
+
+      // Step 2: show a little "loading" message while we wait
+      const resultBox = document.getElementById("result");
+      resultBox.style.display = "block";
+      resultBox.innerHTML = "⏳ Thinking...";
+
+      try {
+        // Step 3: "call" our backend at the /analyze-review door
+        const response = await fetch("http://127.0.0.1:5000/analyze-review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customer, stars, text })
+        });
+
+        // Step 4: read the answer that comes back
+        const data = await response.json();
+
+        // Step 5: show it nicely on the screen
+        resultBox.innerHTML = `
+          <p><span class="label">😊 Mood:</span> ${data.mood}</p>
+          <p><span class="label">💬 Suggested reply:</span><br>${data.suggested_reply}</p>
+        `;
+
+        // 📖 Also refresh the history so the new one shows up right away
+        loadHistory();
+      } catch (error) {
+        // If anything goes wrong (like the backend isn't running), show a friendly message
+        resultBox.innerHTML = "⚠️ Couldn't reach the backend. Is vibereply_backend.py still running in your terminal?";
+      }
+    }
+
+    // 📖 NEW: This function asks the backend for everything saved so far,
+    // then builds a little card for each one and shows them on the page.
+    async function loadHistory() {
+      const historyList = document.getElementById("historyList");
+      historyList.innerHTML = "⏳ Loading history...";
+
+      try {
+        const response = await fetch("http://127.0.0.1:5000/saved-reviews");
+        const reviews = await response.json();
+
+        if (reviews.length === 0) {
+          historyList.innerHTML = "<p>No reviews saved yet — submit one above!</p>";
+          return;
+        }
+
+        // Show the newest ones first
+        const reversed = reviews.slice().reverse();
+
+        historyList.innerHTML = reversed.map(r => `
+          <div class="history-card">
+            <p><span class="stars">${"⭐".repeat(r.stars)}</span> — ${r.customer}
+               <span class="timestamp"> (${r.saved_at})</span></p>
+            <p>"${r.text}"</p>
+            <p><span class="label">Mood:</span> ${r.mood}</p>
+            <p><span class="label">Reply:</span> ${r.suggested_reply}</p>
+          </div>
+        `).join("");
+      } catch (error) {
+        historyList.innerHTML = "⚠️ Couldn't load history. Is the backend running?";
+      }
+    }
+  </script>
+
+</body>
+</html>
