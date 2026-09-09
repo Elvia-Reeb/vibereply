@@ -94,7 +94,7 @@ def ask_ai(prompt):
             "content-type": "application/json",
         },
         json={
-            "model": "claude-sonnet-4-6",
+            "model": "claude-haiku-4-5-20251001",
             "max_tokens": 300,
             "messages": [{"role": "user", "content": prompt}],
         },
@@ -274,8 +274,9 @@ things went overall, mentioning the good and the areas to improve.
 
 if __name__ == "__main__":
     print(f"🌟 Starting {BUSINESS_NAME} backend...")
-    print("👉 Open http://127.0.0.1:5000 in your browser to test it!")
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"👉 Running on port {port}")
+    app.run(debug=True, host="0.0.0.0", port=port)
 
 
 # -------------------------------------------------------------------
