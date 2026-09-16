@@ -1,91 +1,231 @@
 """
-🌟 VIBEREPLY BACKEND 🌟
-------------------------
-This turns VibeReply into a real "waiter" (a web server) that other apps
-(a website, a mobile app, anything) can send requests to.
+🕸️ THREADWISE BACKEND 🕸️
+--------------------------
+This turns Threadwise into a real "waiter" (a web server) that a website
+or app can send requests to — same idea as the VibeReply backend.
 
-Think of each function below as a "counter" at a restaurant:
-  - Someone walks up (sends a request)
-  - We take their order (read what they sent)
-  - We ask the chef (our AI functions) to make it
-  - We hand back the food (send back the answer)
-
-We're using a tool called "Flask" — it's the easiest way in Python to build
-a backend, especially for beginners.
+Routes (doors) available:
+  /                  -> simple "are you alive?" check
+  /rank-prospects     -> get ALL prospects ranked by warmth (GET)
+  /prospect/<name>    -> get warm path details for ONE prospect (GET)
+  /write-opener       -> get an AI-written opener message for a prospect (POST)
 """
 
 import os
 import json
-from datetime import datetime
+from datetime import date
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
-CORS(app)  # 🔓 This lets webpages (like our frontend) talk to this backend safely
+CORS(app)  # 🔓 lets a webpage frontend talk to this backend safely
 
-BUSINESS_NAME = "VibeReply Demo Co."
-PERSONALITY = "friendly and casual, like chatting with a helpful friend"
-
-# -------------------------------------------------------------------
-# 💾 SAVING DATA — a simple "notebook" file to remember every review
-# -------------------------------------------------------------------
-# We're using the SIMPLEST possible way to save data: a plain file called
-# "saved_reviews.json". Think of it like a notebook — every time someone
-# submits a review, we open the notebook, add a new entry, and close it.
-#
-# This is perfect for learning! Later, once you have real clients, you'd
-# upgrade to a proper database (like SQLite) — but the IDEA is the same.
-
-SAVE_FILE = "saved_reviews.json"
-
-
-def load_saved_reviews():
-    # Open the notebook and read everything in it.
-    # If the notebook doesn't exist yet, just start with an empty list.
-    if not os.path.exists(SAVE_FILE):
-        return []
-    with open(SAVE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_review_entry(entry):
-    # Read what's already saved, add our new entry, then write it all back.
-    all_reviews = load_saved_reviews()
-    all_reviews.append(entry)
-    with open(SAVE_FILE, "w", encoding="utf-8") as f:
-        json.dump(all_reviews, f, indent=2)
+PRACTICE_MODE = True  # 🎈 Free testing mode — no API key needed
 
 # -------------------------------------------------------------------
-# 🎈 PRACTICE MODE — no API key, no cost, just pretend replies!
+# 💾 SAVING REAL DATA — a "notebook" file, just like VibeReply
 # -------------------------------------------------------------------
-# Set this to True to practice for FREE with fake AI answers.
-# Set it to False later (once you have an API key) to use the real AI.
+# Your REAL prospects get saved here so they don't disappear when the
+# backend restarts. The pretend ones below are only used the very
+# first time, before you've added any real ones.
 
-PRACTICE_MODE = True
+PROSPECTS_FILE = "saved_prospects.json"
+
+
+def load_prospects():
+    if os.path.exists(PROSPECTS_FILE):
+        with open(PROSPECTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # First time ever running — start with the pretend demo prospects
+    return list(default_prospects)
+
+
+def save_all_prospects(prospect_list):
+    with open(PROSPECTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(prospect_list, f, indent=2)
 
 
 # -------------------------------------------------------------------
-# 🧠 Same "ask the AI" helper from before — the engine behind everything
+# 👤 YOUR BACKGROUND (pretend data for now)
 # -------------------------------------------------------------------
 
-def ask_ai(prompt):
-    # 🎈 PRACTICE MODE: skip the real AI completely, return a pretend answer
+my_background = {
+    "past_companies": ["Acme Corp", "BrightBot AI", "Nova Systems"],
+    "connections": {
+        "Sarah Malik": {"last_talked": date(2026, 8, 20)},
+        "James Cho": {"last_talked": date(2024, 3, 10)},
+        "Fatima Noor": {"last_talked": date(2026, 7, 1)},
+        "David Lee": {"last_talked": date(2023, 5, 15)},
+    },
+    "skills_you_offer": ["AI automation", "workflow automation", "review management tools"]
+}
+
+
+# -------------------------------------------------------------------
+# 🎯 PRETEND PROSPECTS
+# -------------------------------------------------------------------
+
+default_prospects = [
+    {
+        "name": "Emma Whitfield",
+        "company": "Lumen Analytics",
+        "past_companies": ["Acme Corp", "Lumen Analytics"],
+        "connections": ["Priya Shah", "Tom Reilly"],
+        "recent_signal": "Posted about drowning in manual customer feedback review"
+    },
+    {
+        "name": "Marcus Webb",
+        "company": "Ironclad Systems",
+        "past_companies": ["Orbit Media", "Ironclad Systems"],
+        "connections": ["Sarah Malik", "Lena Ortiz"],
+        "recent_signal": "Hiring for a role focused on internal workflow automation"
+    },
+    {
+        "name": "Aisha Karim",
+        "company": "Nimbus Cloud",
+        "past_companies": ["Nova Systems", "Nimbus Cloud"],
+        "connections": ["Fatima Noor", "Omar Siddiqui"],
+        "recent_signal": "Mentioned team is overwhelmed replying to customer reviews"
+    },
+    {
+        "name": "Chris Donovan",
+        "company": "Vertex Retail",
+        "past_companies": ["Vertex Retail"],
+        "connections": ["George Kim", "Nina Patel"],
+        "recent_signal": "No recent public activity found"
+    },
+    {
+        "name": "Olivia Grant",
+        "company": "Skyline Partners",
+        "past_companies": ["Skyline Partners", "BrightBot AI"],
+        "connections": ["David Lee", "Ravi Kumar"],
+        "recent_signal": "Shared an article about scaling operations efficiently"
+    },
+]
+
+# 📂 Load real saved prospects (or the pretend ones, the very first time)
+prospects = load_prospects()
+
+
+# -------------------------------------------------------------------
+# 🔋 HELPER: how stale is a connection?
+# -------------------------------------------------------------------
+
+def months_since(past_date):
+    today = date.today()
+    return (today.year - past_date.year) * 12 + (today.month - past_date.month)
+
+
+# -------------------------------------------------------------------
+# 🧠 THE MATCHING ENGINE
+# -------------------------------------------------------------------
+
+def find_warm_path(prospect):
+    shared_companies = list(
+        set(my_background["past_companies"]) & set(prospect["past_companies"])
+    )
+    shared_connections = list(
+        set(my_background["connections"].keys()) & set(prospect["connections"])
+    )
+
+    warmth_score = (len(shared_companies) * 2) + (len(shared_connections) * 3)
+
+    reasons = []
+    freshness_warning = None
+
+    if shared_companies:
+        reasons.append(f"you both worked at {', '.join(shared_companies)}")
+
+    if shared_connections:
+        reasons.append(f"you both know {', '.join(shared_connections)}")
+        for name in shared_connections:
+            months_ago = months_since(my_background["connections"][name]["last_talked"])
+            if months_ago > 12:
+                freshness_warning = (
+                    f"⚠️ You haven't talked to {name} in {months_ago} months — "
+                    f"reconnect with them first before using this path!"
+                )
+                warmth_score -= 2
+
+    explanation = (
+        "Warm path found: " + " and ".join(reasons) + "."
+        if reasons else "No warm path found — this would be a cold outreach."
+    )
+
+    give_first_match = None
+    for skill in my_background["skills_you_offer"]:
+        if skill.lower() in prospect["recent_signal"].lower() or any(
+            word in prospect["recent_signal"].lower() for word in skill.lower().split()
+        ):
+            give_first_match = (
+                f"🎁 Give-first opportunity: they mentioned \"{prospect['recent_signal']}\" "
+                f"— you could genuinely open by offering help with {skill}, instead of asking for anything."
+            )
+            break
+
+    return {
+        "name": prospect["name"],
+        "company": prospect["company"],
+        "warmth_score": warmth_score,
+        "explanation": explanation,
+        "freshness_warning": freshness_warning,
+        "give_first_match": give_first_match
+    }
+
+
+# -------------------------------------------------------------------
+# ✍️ AI OPENER WRITER (with Mode Selector)
+# -------------------------------------------------------------------
+
+MODE_INSTRUCTIONS = {
+    "lead_gen": "The goal is to offer genuine help/value related to their situation, not to sell aggressively.",
+    "job_referral": "The goal is to ask warmly for a quick chat or referral regarding opportunities at their company.",
+    "recruiting": "The goal is to gauge interest in a role you're hiring for, in a low-pressure way.",
+    "partnership": "The goal is to propose exploring a potential collaboration between you two."
+}
+
+
+def write_opener_message(prospect, mode="lead_gen"):
+    warm_path = find_warm_path(prospect)
+
     if PRACTICE_MODE:
-        if "ONLY one word" in prompt:
-            return "Happy"  # pretend mood
-        elif "weekly recap" in prompt:
-            return "This week had a nice mix of praise and a couple of complaints about support speed. Overall, customers love the automation itself — just keep an eye on response times!"
-        elif "REPEATED issues" in prompt:
-            return "Heads up: a couple of reviews mentioned slow support response times. Everything else looks great — customers really like how the automation saves them time!"
+        opener = f"Hi {prospect['name']}, "
+        if warm_path["give_first_match"]:
+            opener += (
+                f"I noticed you mentioned \"{prospect['recent_signal']}\" — "
+                f"I've actually built tools in that exact space and would love to share some thoughts, no strings attached. "
+            )
+        elif "worked at" in warm_path["explanation"]:
+            opener += "I saw we're both connected through our time in similar circles — small world! "
         else:
-            return "Thank you so much for your feedback! We're really glad to hear from you, and we're always working to make things even better. 😊 (this is a PRACTICE MODE pretend reply)"
+            opener += "I came across your profile and wanted to reach out. "
+
+        if mode == "job_referral":
+            opener += "I'm exploring opportunities and would love a quick chat if you're open to it."
+        elif mode == "recruiting":
+            opener += "I'm working on a role I think you could be a great fit for, open to a quick chat?"
+        elif mode == "partnership":
+            opener += "I think there could be a great opportunity for us to collaborate."
+        else:
+            opener += "Happy to share more if it's useful!"
+
+        return opener + " (this is a PRACTICE MODE pretend message)"
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-
     if not api_key:
         return "⚠️ No API key found — set ANTHROPIC_API_KEY first!"
 
+    prompt = f"""
+Write a short, warm LinkedIn opening message (3-4 sentences max) to {prospect['name']}
+at {prospect['company']}.
+
+Context: {warm_path['explanation']}
+Their recent signal: {prospect['recent_signal']}
+{MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS['lead_gen'])}
+
+Do not sound salesy or robotic. Reference the real context naturally.
+"""
     response = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -95,7 +235,7 @@ def ask_ai(prompt):
         },
         json={
             "model": "claude-haiku-4-5-20251001",
-            "max_tokens": 300,
+            "max_tokens": 200,
             "messages": [{"role": "user", "content": prompt}],
         },
     )
@@ -104,168 +244,126 @@ def ask_ai(prompt):
 
 
 # -------------------------------------------------------------------
-# 🚪 ROUTE 1: "Are you alive?" — a simple test door
+# 🚪 ROUTE 1: "Are you alive?" test door
 # -------------------------------------------------------------------
-# This is the easiest possible check. If this works, your backend is running!
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"message": f"👋 {BUSINESS_NAME} backend is alive and running!"})
+    return jsonify({"message": "👋 Threadwise backend is alive and running!"})
 
 
 # -------------------------------------------------------------------
-# 🚪 ROUTE 2: Analyze ONE review (mood + reply)
+# 🚪 ROUTE 2: Rank ALL prospects by warmth
 # -------------------------------------------------------------------
-# Someone sends us ONE review, we send back the mood + a suggested reply.
 
-@app.route("/analyze-review", methods=["POST"])
-def analyze_review():
-    # This reads the data someone sent us (like an order slip)
+@app.route("/rank-prospects", methods=["GET"])
+def rank_prospects():
+    results = [find_warm_path(p) for p in prospects]
+    results.sort(key=lambda r: r["warmth_score"], reverse=True)
+    return jsonify(results)
+
+
+# -------------------------------------------------------------------
+# 🚪 ROUTE 3: Get warm path for ONE prospect by name
+# -------------------------------------------------------------------
+
+@app.route("/prospect/<name>", methods=["GET"])
+def get_prospect(name):
+    for prospect in prospects:
+        if prospect["name"].lower() == name.lower():
+            return jsonify(find_warm_path(prospect))
+    return jsonify({"error": f"No prospect found with the name '{name}'"}), 404
+
+
+# -------------------------------------------------------------------
+# 🚪 ROUTE 4: Write an AI opener message for a prospect + mode
+# -------------------------------------------------------------------
+
+@app.route("/write-opener", methods=["POST"])
+def write_opener():
     data = request.get_json()
-    customer = data.get("customer", "Customer")
-    stars = data.get("stars", 3)
-    text = data.get("text", "")
+    name = data.get("name", "")
+    mode = data.get("mode", "lead_gen")
 
-    # 🎈 PRACTICE MODE: use simple RULES based on stars instead of calling
-    # the real AI, so different ratings give different pretend answers.
-    if PRACTICE_MODE:
-        stars_num = int(stars)
-
-        if stars_num <= 2:
-            mood = "Frustrated"
-            reply = (
-                f"Hi {customer}, we're really sorry to hear this didn't meet your "
-                f"expectations. We'd love the chance to make it right — please reach "
-                f"out so we can help. (this is a PRACTICE MODE pretend reply)"
-            )
-        elif stars_num == 3:
-            mood = "Neutral"
-            reply = (
-                f"Thanks for your honest feedback, {customer}! We're glad it worked "
-                f"okay and we're always looking for ways to make it even better. "
-                f"(this is a PRACTICE MODE pretend reply)"
-            )
-        else:
-            mood = "Happy"
-            reply = (
-                f"Thank you so much, {customer}! We're really glad to hear you had "
-                f"a great experience. 😊 (this is a PRACTICE MODE pretend reply)"
-            )
-
-        # 💾 Save this to our notebook file before sending the answer back
-        save_review_entry({
-            "customer": customer,
-            "stars": stars_num,
-            "text": text,
-            "mood": mood,
-            "suggested_reply": reply,
-            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-
-        return jsonify({
-            "customer": customer,
-            "mood": mood,
-            "suggested_reply": reply
-        })
-    mood_prompt = f"""
-Read this customer review and reply with ONLY one word describing the
-customer's true emotional mood: Happy, Frustrated, Angry, Disappointed,
-Neutral, or Excited.
-
-Review: "{text}"
-"""
-    mood = ask_ai(mood_prompt).strip()
-
-    # Step 2: write a reply matching our personality
-    reply_prompt = f"""
-You are replying to a customer review for "{BUSINESS_NAME}".
-Your reply's tone/personality should be: {PERSONALITY}.
-
-Customer: {customer}
-Star rating: {stars}/5
-Detected mood: {mood}
-Review: "{text}"
-
-Write a short reply (2-4 sentences) matching that personality.
-If the mood is negative, apologize sincerely and offer to fix it.
-If the mood is positive, thank them and mention something specific.
-"""
-    reply = ask_ai(reply_prompt)
-
-    # 💾 Save this to our notebook file before sending the answer back
-    save_review_entry({
-        "customer": customer,
-        "stars": stars,
-        "text": text,
-        "mood": mood,
-        "suggested_reply": reply,
-        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
-
-    # Send the answer back as a nice, organized package (JSON)
-    return jsonify({
-        "customer": customer,
-        "mood": mood,
-        "suggested_reply": reply
-    })
+    for prospect in prospects:
+        if prospect["name"].lower() == name.lower():
+            message = write_opener_message(prospect, mode=mode)
+            return jsonify({
+                "name": prospect["name"],
+                "mode": mode,
+                "message": message
+            })
+    return jsonify({"error": f"No prospect found with the name '{name}'"}), 404
 
 
 # -------------------------------------------------------------------
-# 🚪 ROUTE: View everything saved so far (like opening the notebook)
+# 🚪 ROUTE 5: Add a REAL prospect (saved permanently)
 # -------------------------------------------------------------------
 
-@app.route("/saved-reviews", methods=["GET"])
-def saved_reviews():
-    return jsonify(load_saved_reviews())
-
-
-# -------------------------------------------------------------------
-# 🚪 ROUTE 3: Trend Spotter — heads-up from a LIST of reviews
-# -------------------------------------------------------------------
-
-@app.route("/trends", methods=["POST"])
-def trends():
+@app.route("/add-prospect", methods=["POST"])
+def add_prospect():
     data = request.get_json()
-    reviews = data.get("reviews", [])
 
-    combined_text = "\n".join(
-        f"- ({r.get('stars', 3)} stars) {r.get('text', '')}" for r in reviews
-    )
-    prompt = f"""
-Here are recent customer reviews for "{BUSINESS_NAME}":
+    new_prospect = {
+        "name": data.get("name", ""),
+        "company": data.get("company", ""),
+        # These come in as comma-separated text from the form, so we split them into lists
+        "past_companies": [c.strip() for c in data.get("past_companies", "").split(",") if c.strip()],
+        "connections": [c.strip() for c in data.get("connections", "").split(",") if c.strip()],
+        "recent_signal": data.get("recent_signal", "No recent public activity found")
+    }
 
-{combined_text}
+    if not new_prospect["name"]:
+        return jsonify({"error": "A name is required"}), 400
 
-Look for any REPEATED issues or patterns. Write a short, friendly heads-up
-(2-3 sentences) for the business owner. If nothing repeats, say everything
-looks good and mention one strength instead.
-"""
-    result = ask_ai(prompt)
-    return jsonify({"trend_alert": result})
+    global prospects
+    prospects.append(new_prospect)
+    save_all_prospects(prospects)
+
+    return jsonify({"message": f"✅ Added {new_prospect['name']}", "prospect": new_prospect})
 
 
 # -------------------------------------------------------------------
-# 🚪 ROUTE 4: Review Story — weekly recap from a LIST of reviews
+# 🚪 ROUTE: Delete a prospect by name
 # -------------------------------------------------------------------
 
-@app.route("/review-story", methods=["POST"])
-def review_story():
+@app.route("/delete-prospect/<name>", methods=["DELETE"])
+def delete_prospect(name):
+    global prospects
+    original_count = len(prospects)
+    prospects = [p for p in prospects if p["name"].lower() != name.lower()]
+
+    if len(prospects) == original_count:
+        return jsonify({"error": f"No prospect found with the name '{name}'"}), 404
+
+    save_all_prospects(prospects)
+    return jsonify({"message": f"🗑️ Deleted {name}"})
+
+
+# -------------------------------------------------------------------
+# 🚪 ROUTE 6: Update YOUR background (real companies/connections)
+# -------------------------------------------------------------------
+
+@app.route("/update-background", methods=["POST"])
+def update_background():
     data = request.get_json()
-    reviews = data.get("reviews", [])
 
-    combined_text = "\n".join(
-        f"- ({r.get('stars', 3)} stars) {r.get('text', '')}" for r in reviews
-    )
-    prompt = f"""
-Here are recent customer reviews for "{BUSINESS_NAME}":
+    global my_background
+    if "past_companies" in data:
+        my_background["past_companies"] = [
+            c.strip() for c in data["past_companies"].split(",") if c.strip()
+        ]
+    if "connections" in data:
+        names = [c.strip() for c in data["connections"].split(",") if c.strip()]
+        my_background["connections"] = {
+            name: {"last_talked": date.today()} for name in names
+        }
+    if "skills_you_offer" in data:
+        my_background["skills_you_offer"] = [
+            s.strip() for s in data["skills_you_offer"].split(",") if s.strip()
+        ]
 
-{combined_text}
-
-Write a short, warm "weekly recap" story (4-5 sentences) summarizing how
-things went overall, mentioning the good and the areas to improve.
-"""
-    result = ask_ai(prompt)
-    return jsonify({"review_story": result})
+    return jsonify({"message": "✅ Background updated"})
 
 
 # -------------------------------------------------------------------
@@ -273,8 +371,8 @@ things went overall, mentioning the good and the areas to improve.
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"🌟 Starting {BUSINESS_NAME} backend...")
-    port = int(os.environ.get("PORT", 5000))
+    print("🕸️ Starting Threadwise backend...")
+    port = int(os.environ.get("PORT", 5001))
     print(f"👉 Running on port {port}")
     app.run(debug=True, host="0.0.0.0", port=port)
 
@@ -282,17 +380,14 @@ if __name__ == "__main__":
 # -------------------------------------------------------------------
 # 📝 HOW TO RUN THIS (baby steps!)
 # -------------------------------------------------------------------
-# 1. Install the extra tool this needs:
-#      pip install flask requests
+# 1. Install what this needs:
+#      pip install flask flask-cors requests
 #
-# 2. Set your API key (same as before):
-#      Mac/Linux:   export ANTHROPIC_API_KEY="your-key-here"
-#      Windows:     set ANTHROPIC_API_KEY=your-key-here
+# 2. Run it:
+#      python threadwise_backend.py
 #
-# 3. Run the backend:
-#      python vibereply_backend.py
+# 3. Open http://127.0.0.1:5001 in your browser — you should see a
+#    friendly "backend is alive" message!
 #
-# 4. You'll see a message saying it's running on http://127.0.0.1:5000
-#    Open that link in your browser — you should see a friendly hello message!
-#
-# That's it — your backend is officially "alive" and waiting for requests. 🎉
+# NOTE: This uses port 5001 (not 5000) so it can run at the same time
+# as your VibeReply backend without clashing.
